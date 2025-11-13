@@ -2,120 +2,80 @@
 import os
 import subprocess
 import time
-import json
-from rich.console import Console
-from rich.table import Table
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-console = Console()
 
-NGROK_DOMAIN = os.getenv("STATIC_NGROK_DOMAIN")     # e.g. https://yourbot.ngrok-free.app
-NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
 
-LMSTUDIO_MODELS_DIR = os.path.expanduser("~/Library/Application Support/LM Studio/models") \
-    if os.name == "posix" else os.path.expanduser("~/AppData/Roaming/LM Studio/models")
+from server import send_bot_online_message
 
+def start_ngrok():
+    print("Starting ngrok tunnel...")
+    ngrok = subprocess.Popen(
+        ["ngrok", "http", "8000"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
 
-def list_models():
-    models = []
-    if os.path.exists(LMSTUDIO_MODELS_DIR):
-        for folder in os.listdir(LMSTUDIO_MODELS_DIR):
-            models.append(folder)
-    return models
+    time.sleep(3)  # give ngrok time to boot
 
-
-def choose_model(models):
-    table = Table(title="Installed LM Studio Models")
-    table.add_column("Index")
-    table.add_column("Model Name")
-
-    for i, m in enumerate(models):
-        table.add_row(str(i), m)
-
-    console.print(table)
-    idx = int(console.input("\nChoose a model index: "))
-    return models[idx]
-
-
-def choose_gpu():
-    console.print("\n[bold]Available GPUs:[/bold]")
-
+    # Fetch public URL
     try:
-        result = subprocess.check_output("nvidia-smi --query-gpu=name --format=csv,noheader", shell=True)
-        gpus = result.decode().strip().split("\n")
+        tunnels = requests.get("http://127.0.0.1:4040/api/tunnels").json()
+        public_url = tunnels["tunnels"][0]["public_url"]
     except:
-        gpus = ["CPU only"]
+        print("❌ Failed to get ngrok URL")
+        return None, ngrok
 
-    for i, g in enumerate(gpus):
-        console.print(f"[cyan]{i}[/cyan] → {g}")
-
-    idx = int(console.input("\nChoose GPU index: "))
-    return idx, gpus[idx]
+    print("ngrok URL:", public_url)
+    return public_url, ngrok
 
 
-def launch_lmstudio(model, gpu_index):
-    console.print(f"\n[green]Launching LM Studio server with model: {model}[/green]")
-
-    cmd = f"""
-    lmstudio server start \
-        --model "{model}" \
-        --port 1234 \
-        --gpu {gpu_index}
-    """
-
-    return subprocess.Popen(cmd, shell=True)
+def start_server():
+    print("Starting FastAPI server...")
+    return subprocess.Popen(["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"])
 
 
-def launch_ngrok():
-    console.print("\n[yellow]Starting ngrok static tunnel...[/yellow]")
+def set_webhook(public_url):
+    webhook_url = f"{public_url}/webhook"
+    print("Setting webhook:", webhook_url)
 
-    subprocess.run(f"ngrok config add-authtoken {NGROK_AUTHTOKEN}", shell=True)
-    subprocess.Popen(f"ngrok http --domain={NGROK_DOMAIN} 8000", shell=True)
-
-    time.sleep(2)
-    return NGROK_DOMAIN
-
-
-def set_webhook(url):
-    import requests
-    webhook = url + "/webhook"
-    console.print(f"\nSetting Telegram webhook to: {webhook}")
-
-    resp = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook", params={"url": webhook})
-    console.print(resp.json())
-
-
-def launch_fastapi():
-    console.print("\n[green]Starting FastAPI server...[/green]")
-    return subprocess.Popen("uvicorn server:app --host 0.0.0.0 --port 8000", shell=True)
+    r = requests.get(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+        params={"url": webhook_url}
+    )
+    print(r.json())
 
 
 if __name__ == "__main__":
-    console.print("[bold magenta]=== LM Studio Telegram Bot Launcher ===[/bold magenta]")
+    print("=== LM Studio Telegram Bot Launcher ===")
 
-    models = list_models()
-    if not models:
-        console.print("[red]No models found in LM Studio![/red]")
+    # Start ngrok
+    public_url, ngrok_proc = start_ngrok()
+    if not public_url:
         exit()
 
-    model = choose_model(models)
-    gpu_index, gpu_name = choose_gpu()
+    # Start FastAPI
+    api_proc = start_server()
 
-    lm = launch_lmstudio(model, gpu_index)
-    ngrok_url = launch_ngrok()
-    api = launch_fastapi()
+    # Register webhook
+    time.sleep(3)
+    set_webhook(public_url)
 
-    set_webhook(ngrok_url)
+    # Notify user if possible
+    send_bot_online_message()
 
-    console.print("\n[bold green]System running! Press CTRL+C to stop everything.[/bold green]")
+    print("Bot is LIVE. Send messages in Telegram.")
 
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        console.print("\n[yellow]Shutting down...[/yellow]")
-        lm.terminate()
-        api.terminate()
-        console.print("[green]All processes stopped.[/green]")
+        print("Shutting down...")
+        ngrok_proc.terminate()
+        api_proc.terminate()
+        print("Stopped.")
