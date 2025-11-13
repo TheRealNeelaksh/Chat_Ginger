@@ -12,8 +12,37 @@ NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
 
 from server import send_bot_online_message
 
+import subprocess
+import time
+import requests
+import psutil
+
 def start_ngrok():
-    print("Starting ngrok tunnel...")
+    print("Checking for existing ngrok tunnel...")
+
+    # First: try reading existing tunnel (4040 API)
+    try:
+        tunnels = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
+        if "tunnels" in tunnels and len(tunnels["tunnels"]) > 0:
+            url = tunnels["tunnels"][0]["public_url"]
+            print("Reusing existing ngrok URL:", url)
+            return url, None
+    except:
+        pass  # panel wasn't running, so ngrok not active
+
+    # If ngrok was partially running but broken, kill all processes
+    print("No active tunnel. Killing zombie ngrok processes...")
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and "ngrok" in proc.info['name'].lower():
+            try:
+                proc.kill()
+                print("Killed:", proc.pid)
+            except:
+                pass
+
+    time.sleep(1)
+
+    print("Starting fresh ngrok...")
     ngrok = subprocess.Popen(
         ["ngrok", "http", "8000"],
         stdout=subprocess.PIPE,
@@ -21,18 +50,21 @@ def start_ngrok():
         text=True
     )
 
-    time.sleep(3)  # give ngrok time to boot
+    # Retry until tunnel appears
+    for _ in range(10):
+        try:
+            time.sleep(1)
+            tunnels = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
+            if "tunnels" in tunnels and len(tunnels["tunnels"]) > 0:
+                url = tunnels["tunnels"][0]["public_url"]
+                print("ngrok started:", url)
+                return url, ngrok
+        except:
+            pass
 
-    # Fetch public URL
-    try:
-        tunnels = requests.get("http://127.0.0.1:4040/api/tunnels").json()
-        public_url = tunnels["tunnels"][0]["public_url"]
-    except:
-        print("❌ Failed to get ngrok URL")
-        return None, ngrok
+    print("❌ Failed to start ngrok tunnel after retries.")
+    return None, ngrok
 
-    print("ngrok URL:", public_url)
-    return public_url, ngrok
 
 
 def start_server():
