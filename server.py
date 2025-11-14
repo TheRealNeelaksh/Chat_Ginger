@@ -1,16 +1,14 @@
-# server.py
 from fastapi import FastAPI, Request
 import requests
 import os
 from dotenv import load_dotenv
 from llm import generate_reply
+from memory import reset_memory
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 app = FastAPI()
-
-LAST_CHAT_ID = None
 
 
 def send_typing(chat_id):
@@ -32,48 +30,37 @@ async def ignore_favicon():
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    global LAST_CHAT_ID
 
     data = await request.json()
 
     if "message" in data:
         chat_id = data["message"]["chat"]["id"]
-        LAST_CHAT_ID = chat_id
-
         text = data["message"].get("text", "")
+
+        # /reset
+        if text.strip().lower() == "/reset":
+            reset_memory(chat_id)
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": "🧹 Memory cleared.",
+                    "parse_mode": "HTML"
+                }
+            )
+            return {"ok": True}
 
         send_typing(chat_id)
 
-        reply = generate_reply(text)
-
-        if not reply or reply.strip() == "":
-            reply = "⚠️ Model offline or failed to respond."
+        reply = generate_reply(chat_id, text)
 
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": reply}
+            json={
+                "chat_id": chat_id,
+                "text": reply,
+                "parse_mode": "HTML"
+            }
         )
 
     return {"ok": True}
-
-
-
-# -----------------------------
-# Safe "bot online" message
-# -----------------------------
-def send_bot_online_message():
-    global LAST_CHAT_ID
-
-    if LAST_CHAT_ID is None:
-        print("⚠️ Bot online but no user has messaged yet.")
-        return
-
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": LAST_CHAT_ID, "text": "🤖 Bot is online and connected to LM Studio."}
-        )
-        print("Startup message sent.")
-
-    except Exception as e:
-        print("Failed to send startup message:", e)

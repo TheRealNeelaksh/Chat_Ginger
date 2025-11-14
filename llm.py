@@ -1,23 +1,38 @@
-# llm.py
 import os
 import requests
 from dotenv import load_dotenv
+from memory import load_memory, append_memory
 
 load_dotenv()
 
-BASE_URL = os.getenv("LMSTUDIO_API_URL")   # ex: http://172.16.0.2:7007/v1
-MODEL = os.getenv("LMSTUDIO_MODEL")        # ex: meta-llama-3-8b-instruct
+BASE_URL = os.getenv("LMSTUDIO_API_URL")
+MODEL = os.getenv("LMSTUDIO_MODEL")
 API_KEY = os.getenv("LMSTUDIO_KEY", "lm-studio")
 
 
-def generate_reply(user_text: str) -> str:
-    url = f"{BASE_URL}/chat/completions"
+def escape_html(text: str) -> str:
+    return (text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def generate_reply(chat_id, user_text: str) -> str:
+
+    # Load per-user chat history
+    history = load_memory(chat_id)
+
+    # Append user message
+    append_memory(chat_id, "user", user_text)
+
+    # Convert memory to LM format
+    messages = [{"role": m["role"], "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": user_text})
 
     payload = {
         "model": MODEL,
-        "messages": [
-            {"role": "user", "content": user_text}
-        ],
+        "messages": messages,
         "temperature": 0.7,
         "max_tokens": 300,
         "stream": False
@@ -25,7 +40,7 @@ def generate_reply(user_text: str) -> str:
 
     try:
         resp = requests.post(
-            url,
+            f"{BASE_URL}/chat/completions",
             json=payload,
             headers={"Authorization": f"Bearer {API_KEY}"}
         )
@@ -34,9 +49,12 @@ def generate_reply(user_text: str) -> str:
         print("LMStudio response:", resp.text)
 
         resp.raise_for_status()
-        data = resp.json()
 
-        return data["choices"][0]["message"]["content"]
+        reply = resp.json()["choices"][0]["message"]["content"]
+
+        append_memory(chat_id, "assistant", reply)
+
+        return escape_html(reply)
 
     except Exception as e:
         print("LM Studio ERROR:", e)

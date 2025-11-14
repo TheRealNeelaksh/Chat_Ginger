@@ -1,4 +1,3 @@
-# controller.py
 import os
 import subprocess
 import time
@@ -9,40 +8,34 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
+OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 
-from server import send_bot_online_message
 
-import subprocess
-import time
-import requests
-import psutil
+def send_startup_message():
+    if not OWNER_CHAT_ID:
+        print("⚠️ OWNER_CHAT_ID missing, cannot send startup message.")
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": OWNER_CHAT_ID,
+                "text": "🤖 Ginger is online.\nLM Studio connected.\nngrok tunnel active.\nReady.",
+                "parse_mode": "HTML"
+            }
+        )
+        print("Startup message sent.")
+    except Exception as e:
+        print("Failed to send startup message:", e)
+
 
 def start_ngrok():
-    print("Checking for existing ngrok tunnel...")
+    print("Starting ngrok tunnel...")
 
-    # First: try reading existing tunnel (4040 API)
-    try:
-        tunnels = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
-        if "tunnels" in tunnels and len(tunnels["tunnels"]) > 0:
-            url = tunnels["tunnels"][0]["public_url"]
-            print("Reusing existing ngrok URL:", url)
-            return url, None
-    except:
-        pass  # panel wasn't running, so ngrok not active
+    # Ensure ngrok authtoken is registered
+    subprocess.run(["ngrok", "config", "add-authtoken", NGROK_AUTHTOKEN])
 
-    # If ngrok was partially running but broken, kill all processes
-    print("No active tunnel. Killing zombie ngrok processes...")
-    for proc in psutil.process_iter(['name']):
-        if proc.info['name'] and "ngrok" in proc.info['name'].lower():
-            try:
-                proc.kill()
-                print("Killed:", proc.pid)
-            except:
-                pass
-
-    time.sleep(1)
-
-    print("Starting fresh ngrok...")
     ngrok = subprocess.Popen(
         ["ngrok", "http", "8000"],
         stdout=subprocess.PIPE,
@@ -50,40 +43,16 @@ def start_ngrok():
         text=True
     )
 
-    # Retry until tunnel appears
-    for _ in range(10):
-        try:
-            time.sleep(1)
-            tunnels = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
-            if "tunnels" in tunnels and len(tunnels["tunnels"]) > 0:
-                url = tunnels["tunnels"][0]["public_url"]
-                print("ngrok started:", url)
-                return url, ngrok
-        except:
-            pass
-
-    print("❌ Failed to start ngrok tunnel after retries.")
-    return None, ngrok
-
-def send_startup_message():
-    owner_id = os.getenv("OWNER_CHAT_ID")
-
-    if not owner_id:
-        print("⚠️ OWNER_CHAT_ID not set. Cannot send startup message.")
-        return
+    time.sleep(3)
 
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": owner_id,
-                "text": "🤖 Ginger: Online.\nLM Studio connected.\nngrok tunnel active.\nReady to chat."
-            }
-        )
-        print("Startup message sent successfully.")
-
-    except Exception as e:
-        print("❌ Failed to send startup message:", e)
+        tunnels = requests.get("http://127.0.0.1:4040/api/tunnels").json()
+        public_url = tunnels["tunnels"][0]["public_url"]
+        print("ngrok URL:", public_url)
+        return public_url, ngrok
+    except:
+        print("❌ Failed to get ngrok URL")
+        return None, ngrok
 
 
 def start_server():
@@ -99,27 +68,25 @@ def set_webhook(public_url):
         f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
         params={"url": webhook_url}
     )
+
     print(r.json())
+
 
 if __name__ == "__main__":
     print("=== LM Studio Telegram Bot Launcher ===")
 
-    # Start ngrok
     public_url, ngrok_proc = start_ngrok()
     if not public_url:
         exit()
 
-    # Start FastAPI
     api_proc = start_server()
 
-    # Register webhook
     time.sleep(3)
     set_webhook(public_url)
 
-    # Send the startup greeting
     send_startup_message()
 
-    print("Bot is LIVE. Send messages in Telegram.")
+    print("Bot is LIVE.")
 
     try:
         while True:
