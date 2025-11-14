@@ -65,6 +65,25 @@ def start_ngrok():
     print("❌ Failed to start ngrok tunnel after retries.")
     return None, ngrok
 
+def send_startup_message():
+    owner_id = os.getenv("OWNER_CHAT_ID")
+
+    if not owner_id:
+        print("⚠️ OWNER_CHAT_ID not set. Cannot send startup message.")
+        return
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": owner_id,
+                "text": "🤖 Ginger: Online.\nLM Studio connected.\nngrok tunnel active.\nReady to chat."
+            }
+        )
+        print("Startup message sent successfully.")
+
+    except Exception as e:
+        print("❌ Failed to send startup message:", e)
 
 
 def start_server():
@@ -82,7 +101,6 @@ def set_webhook(public_url):
     )
     print(r.json())
 
-
 if __name__ == "__main__":
     print("=== LM Studio Telegram Bot Launcher ===")
 
@@ -98,8 +116,8 @@ if __name__ == "__main__":
     time.sleep(3)
     set_webhook(public_url)
 
-    # Notify user if possible
-    send_bot_online_message()
+    # Send the startup greeting
+    send_startup_message()
 
     print("Bot is LIVE. Send messages in Telegram.")
 
